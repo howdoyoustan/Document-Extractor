@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 10
+names: ['Address', 'Class', 'DOB', 'Exp date', 'Face', 'First name', 'Issue date', 'Last name', 'License number', 'Sex']
+
+roboflow:
+  workspace: driving-license-detection
+  project: k-fqyfn-qbiem
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/driving-license-detection/k-fqyfn-qbiem/dataset/1
