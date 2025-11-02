@@ -1,7 +1,0 @@
-flask
-werkzeug
-ultralytics
-opencv-python-headless
-PyMuPDF
-cv2 
-ultralytics
