@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 5
+names: ['addr', 'dl', 'dob', 'father', 'name']
+
+roboflow:
+  workspace: driving-licenseentity
+  project: driving-license-entity
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/driving-licenseentity/driving-license-entity/dataset/1
