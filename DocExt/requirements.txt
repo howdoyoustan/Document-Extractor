@@ -5,3 +5,4 @@ Pillow
 PyMuPDF
 easyocr
 numpy<2.0
+
