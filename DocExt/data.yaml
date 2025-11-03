@@ -3,7 +3,7 @@ val: ../valid/images
 test: ../test/images
 
 nc: 10
-names: ['Address', 'Class', 'DOB', 'Exp date', 'Face', 'First name', 'Issue date', 'Last name', 'License number', 'Sex']
+names: ['Address', 'DOB', 'Exp date', 'Face', 'First name', 'Issue date', 'Last name', 'License number', 'Gender']
 
 roboflow:
   workspace: driving-license-detection

@@ -13,6 +13,21 @@ MODEL_PATH = "best_model.pt"  # Path to your trained 'best.pt' file
 DB_NAME = "customers.db"
 CLASS_NAMES = ['Address', 'Class', 'DOB', 'Exp date', 'Face', 'First name', 'Issue date', 'Last name', 'License number', 'Sex']
 
+# --- Model Loading (Cached) ---
+
+@st.cache_resource
+def load_models():
+    """Loads and caches the YOLO and EasyOCR models."""
+    print("Loading models...")
+    try:
+        yolo_model = YOLO(MODEL_PATH)
+        ocr_reader = easyocr.Reader(['en']) # Initialize EasyOCR
+        print("Models loaded successfully.")
+        return yolo_model, ocr_reader
+    except Exception as e:
+        print(f"Error loading models: {e}")
+        raise e
+
 # --- Database Functions ---
 
 def init_db():
@@ -40,48 +55,28 @@ def add_customer(data):
             values.append(value)
             
     placeholders = ', '.join(['?'] * len(values))
-    columns = ', '.join(keys)
+    insert_query = f"INSERT INTO customers ({', '.join(keys)}) VALUES ({placeholders})"
     
     try:
-        query = f"INSERT INTO customers ({columns}) VALUES ({placeholders})"
-        c.execute(query, tuple(values))
+        c.execute(insert_query, values)
         conn.commit()
-        st.success("Customer successfully saved to the database!")
-    except sqlite3.Error as e:
-        st.error(f"An error occurred while saving to the database: {e}")
+    except Exception as e:
+        st.error(f"Database error: {e}")
     finally:
         conn.close()
 
-# --- Model & Processing Functions ---
+# --- Image/PDF Processing Functions ---
 
-@st.cache_resource
-def load_models():
-    """Loads the YOLOv8 and EasyOCR models into memory."""
-    # Check if model file exists
-    if not os.path.exists(MODEL_PATH):
-        st.error(f"YOLO model file not found at {MODEL_PATH}")
-        st.stop()
-        
-    model = YOLO(MODEL_PATH)
-    # Initialize EasyOCR reader
-    # 'en' is for English. Add other languages if needed, e.g., ['en', 'es']
-    reader = easyocr.Reader(['en'], gpu=False) # Set gpu=True if you have a compatible GPU
-    return model, reader
-
-def pdf_to_image(pdf_bytes):
+def pdf_to_image(file_bytes):
     """Converts the first page of a PDF to a PIL Image."""
     try:
-        # Open the PDF from bytes
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
         page = doc.load_page(0)  # Load the first page
-        
-        # Render page to a pixmap (image)
-        # We can increase DPI for better quality
-        pix = page.get_pixmap(dpi=300)
-        
-        # Convert pixmap to PIL Image
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        pix = page.get_pixmap(dpi=300)  # Render at high resolution
         doc.close()
+        
+        # Convert to PIL Image
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         return img
     except Exception as e:
         st.error(f"Error converting PDF: {e}")
@@ -90,16 +85,15 @@ def pdf_to_image(pdf_bytes):
 def process_image(image, yolo_model, ocr_reader):
     """
     Runs YOLO detection and OCR on the image.
-    Returns a dictionary of extracted data and the face image.
+    Returns a dictionary of extracted data and the annotated image.
     """
     # --- 1. YOLOv8 Detection ---
     results = yolo_model.predict(image, conf=0.4) # Use a confidence threshold
     
     extracted_data = {}
-    face_image = None
     
     # Convert PIL Image to NumPy array for cropping (OpenCV format)
-    image_np = np.array(image)
+    image_np = np.array(image.convert("RGB"))
     
     # Get the bounding boxes, class IDs, and class names
     boxes = results[0].boxes.xyxy.cpu().numpy()  # [x1, y1, x2, y2]
@@ -107,7 +101,7 @@ def process_image(image, yolo_model, ocr_reader):
     
     if len(boxes) == 0:
         st.warning("YOLO model did not detect any fields. Try a clearer image or adjust model confidence.")
-        return {}, None
+        return {}, image # Return original image if no detections
 
     # --- 2. Crop, OCR, and Process Results ---
     for i, box in enumerate(boxes):
@@ -126,8 +120,6 @@ def process_image(image, yolo_model, ocr_reader):
         else:
             # --- 3b. Handle Text (OCR) ---
             # Use EasyOCR to read text from the cropped image
-            # 'detail=0' returns a list of strings
-            # 'paragraph=True' can help combine text, but for ID fields, False is better.
             ocr_result = ocr_reader.readtext(cropped_image, detail=0, paragraph=False)
             
             if ocr_result:
@@ -141,19 +133,73 @@ def process_image(image, yolo_model, ocr_reader):
     annotated_image = image.copy()
     draw = ImageDraw.Draw(annotated_image)
     
-    # You may need to load a font to draw text
-    # try:
-    #     font = ImageFont.truetype("arial.ttf", 15)
-    # except IOError:
-    #     font = ImageFont.load_default() # Fallback
+    # Fallback font
+    font = ImageFont.load_default()
         
     for i, box in enumerate(boxes):
         x1, y1, x2, y2 = map(int, box)
         cls_name = CLASS_NAMES[class_ids[i]]
         draw.rectangle([x1, y1, x2, y2], outline="red", width=2)
-        # draw.text((x1, y1 - 10), cls_name, fill="red", font=font)
+        draw.text((x1, y1 - 10), cls_name, fill="red", font=font)
 
     return extracted_data, annotated_image
+
+# --- Streamlit Form Display Function ---
+
+def process_and_display(class_names):
+    """Displays the Streamlit form using data from session_state."""
+    try:
+        if "extracted_data" in st.session_state:
+            extracted_data = st.session_state.extracted_data
+            face_image = st.session_state.face_image
+
+            with st.form("customer_form"):
+                st.subheader("Extracted Customer Information")
+                st.write("Please verify the data below.")
+
+                if face_image:
+                    # CHANGE 2: Display Full Name under face
+                    first_name = extracted_data.get("First name", "")
+                    last_name = extracted_data.get("Last name", "")
+                    full_name = f"{first_name} {last_name}".strip()
+                    
+                    caption_text = full_name if full_name else "Customer Face"
+                    
+                    st.image(face_image, caption=caption_text, width=150)
+                
+                # This dict will hold the FINAL values from the form
+                form_data = {}
+
+                # Dynamically create text inputs for all fields except 'Face'
+                for field_name in class_names:
+                    if field_name == "Face":
+                        continue
+                    
+                    default_value = extracted_data.get(field_name, "")
+                    
+                    # CHANGE 1: Don't display 'Class' if it's empty
+                    if field_name == "Class" and not default_value:
+                        form_data[field_name] = "" # Assign the empty string directly
+                        continue # Skip creating the st.text_input
+                    
+                    # Create the input and store its current value
+                    form_data[field_name] = st.text_input(f"{field_name}", value=default_value)
+
+                submitted = st.form_submit_button("Save Customer")
+                if submitted:
+                    # On submit, 'form_data' now contains all the edited values
+                    add_customer(form_data) # Corrected function call
+                    st.success("Customer saved successfully!")
+                    
+                    # Clear session state to reset the app
+                    keys_to_clear = ["extracted_data", "face_image", "file_processed", "annotated_image"]
+                    for key in keys_to_clear:
+                        if key in st.session_state:
+                            del st.session_state[key]
+                    st.rerun() # Rerun to show the file uploader again
+
+    except Exception as e:
+        st.error(f"Error displaying form: {e}")
 
 # --- Main Streamlit App UI ---
 
@@ -167,7 +213,7 @@ init_db()
 try:
     yolo_model, ocr_reader = load_models()
 except Exception as e:
-    st.error(f"Fatal error loading models: {e}")
+    st.error(f"Fatal error loading models: {e}. Please check model path and dependencies.")
     st.stop()
 
 
@@ -175,53 +221,56 @@ except Exception as e:
 uploaded_file = st.file_uploader("Upload an ID (PDF, JPG, PNG)", type=["pdf", "jpg", "jpeg", "png"])
 
 if uploaded_file:
-    # --- 1. Load and Convert File ---
-    file_bytes = uploaded_file.getvalue()
-    
-    if uploaded_file.type == "application/pdf":
-        st.write("Converting PDF to image...")
-        original_image = pdf_to_image(file_bytes)
-    else:
-        original_image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-
-    if original_image:
-        st.write("Processing image...")
+    # Use session state to avoid reprocessing on form submission
+    if "file_processed" not in st.session_state:
+        # --- 1. Load and Convert File ---
+        file_bytes = uploaded_file.getvalue()
         
-        # --- 2. Process Image (YOLO + OCR) ---
-        with st.spinner("Detecting fields and extracting data..."):
-            extracted_data, annotated_image = process_image(original_image, yolo_model, ocr_reader)
-
-        st.subheader("Extraction Results")
-        
-        # Display annotated image
-        st.image(annotated_image, caption="Detected Fields", use_column_width=True)
-
-        if not extracted_data:
-            st.error("No data could be extracted. Please try another file.")
+        if uploaded_file.type == "application/pdf":
+            st.write("Converting PDF to image...")
+            original_image = pdf_to_image(file_bytes)
         else:
-            # --- 3. Display Web Form ---
-            st.subheader("Customer Verification Form")
-            st.write("Please verify the extracted data and submit.")
-            
-            with st.form("customer_form"):
-                
-                # Column for Face
-                if "Face" in extracted_data:
-                    st.image(extracted_data["Face"], caption="Customer", width=200)
-                
-                # Dynamically create text inputs for other fields
-                form_data = {}
-                for field_name in CLASS_NAMES:
-                    if field_name != 'Face':
-                        # Get the extracted value, default to empty string if not found
-                        default_value = extracted_data.get(field_name, "")
-                        form_data[field_name] = st.text_input(field_name, value=default_value)
-                
-                # Submit button
-                submitted = st.form_submit_button("Save Customer")
+            original_image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
 
-                # --- 4. Save to DB ---
-                if submitted:
-                    add_customer(form_data)
+        if original_image:
+            st.write("Processing image...")
+            
+            # --- 2. Process Image (YOLO + OCR) ---
+            with st.spinner("Detecting fields and extracting data..."):
+                extracted_data, annotated_image = process_image(original_image, yolo_model, ocr_reader)
+            
+            if not extracted_data:
+                st.error("No data could be extracted. Please try another file.")
+                # Clear state and stop
+                keys_to_clear = ["extracted_data", "face_image", "file_processed", "annotated_image"]
+                for key in keys_to_clear:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                st.stop()
+            
+            # Store results in session state
+            st.session_state.extracted_data = extracted_data
+            st.session_state.annotated_image = annotated_image
+            st.session_state.face_image = extracted_data.get("Face", None)
+            st.session_state.file_processed = True
+        else:
+            st.error("Could not load image.")
+            st.stop()
+
+    # --- 3. Display Results and Form ---
+    # This part runs every time, reading from session state
+    if "file_processed" in st.session_state:
+        st.subheader("Extraction Results")
+        st.image(st.session_state.annotated_image, caption="Detected Fields", use_column_width=True)
+        
+        # Call the function that displays the form
+        process_and_display(CLASS_NAMES)
+
 else:
+    # Clear session state if file is removed or app is reset
+    keys_to_clear = ["extracted_data", "face_image", "file_processed", "annotated_image"]
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
     st.info("Please upload a file to begin the onboarding process.")
+
