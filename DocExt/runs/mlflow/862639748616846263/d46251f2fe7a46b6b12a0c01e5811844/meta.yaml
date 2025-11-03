@@ -1,5 +1,5 @@
 artifact_uri: file:C:/Users/ddev/Documents/projects/Customer Onboarding/DocExt/runs/mlflow/862639748616846263/d46251f2fe7a46b6b12a0c01e5811844/artifacts
-end_time: null
+end_time: 1762122499032
 entry_point_name: ''
 experiment_id: '862639748616846263'
 lifecycle_stage: active
@@ -10,6 +10,6 @@ source_name: ''
 source_type: 4
 source_version: ''
 start_time: 1762113000034
-status: 1
+status: 3
 tags: []
 user_id: ddev
